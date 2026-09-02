@@ -411,8 +411,10 @@ class TradingEngine:
             raise RuntimeError("quantity must be positive")
         if action not in {"BUY", "SELL"}:
             raise RuntimeError("action must be BUY or SELL")
-        if order_type not in {"LOC", "MOC"}:
-            raise RuntimeError("order_type must be LOC or MOC")
+        if order_type not in {"MKT", "LMT"}:
+            raise RuntimeError("manual order_type must be MKT or LMT")
+        if order_type == "LMT" and (limit_price is None or limit_price <= 0):
+            raise RuntimeError("LMT order requires a positive limit_price")
         if not self.broker.is_connected():
             raise RuntimeError("IB Gateway disconnected")
         positions = self.strategy_positions(await self.broker.positions())
@@ -435,11 +437,8 @@ class TradingEngine:
         if (datetime.now(UTC) - quote.timestamp.astimezone(UTC)).total_seconds() >= 5:
             raise RuntimeError("market data is stale")
         reference_price = quote.last
-        if order_type == "LOC":
-            slippage = self.settings.execution.max_entry_slippage_bps / 10_000
-            raw_price = limit_price or (
-                reference_price * (1 + slippage if action == "BUY" else 1 - slippage)
-            )
+        if order_type == "LMT":
+            raw_price = float(limit_price)
             limit_price = (
                 math.floor(raw_price * 100 + 1e-9) / 100
                 if action == "BUY"
@@ -462,7 +461,7 @@ class TradingEngine:
             quantity,
             order_type,
             "DAY",
-            limit_price if order_type == "LOC" else None,
+            limit_price if order_type == "LMT" else None,
             f"turnover_top1:{trade_day}:manual_{action.lower()}:{ticker}:1",
         )
         return await self._submit(

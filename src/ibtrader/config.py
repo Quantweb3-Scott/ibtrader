@@ -34,7 +34,7 @@ class StrategyConfig(BaseModel):
     min_avg_dollar_volume_20d: float = 1_000_000_000
     min_price: float = 5
     snapshot_interval_seconds: int = 10
-    signal_freeze_minutes_before_close: int = 16
+    signal_freeze_minutes_before_close: int = 11
     mag7_universe: list[str] = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"]
     benchmark_ticker: str = "QQQ"
     turnover_zscore_lookback: int = 120

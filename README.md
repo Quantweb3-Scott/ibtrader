@@ -1,6 +1,6 @@
 # IBTrader — MAG7 Turnover 隔夜交易系统
 
-按 [turnover_strategy_design.md](docs/turnover_strategy_design.md) 实现的 IB Gateway 美股隔夜交易服务。DRY_RUN 会同时运行进攻版（ZTurnover120 Top1 + QQQ SMA200）和稳健版（上涨股票 ZTurnover120 等权 Top3 + QQQ SMA100），收盘入场统一使用 MOC，下一交易日开盘以 MKT DAY 模拟出场。
+按 [turnover_strategy_design.md](docs/turnover_strategy_design.md) 实现的 IB Gateway 美股隔夜交易服务。DRY_RUN 会同时运行进攻版（ZTurnover120 Top1 + QQQ SMA200）和稳健版（上涨股票 ZTurnover120 等权 Top3 + QQQ SMA100），正常交易日 15:49 ET 冻结信号并统一提交 MOC，下一交易日开盘以 MKT DAY 模拟出场。
 
 > 重要：默认 `trading_enabled: false` 且 `dry_run: true`。未显式修改两项配置前不会向 IB 发送订单。先使用 Paper 账户完整运行至少 20 个交易日。
 
@@ -82,7 +82,7 @@ risk:
 
 收盘时为进攻版、稳健版分别模拟 MOC 成交并维护独立账本；每个版本各自使用 `initial_strategy_capital_usd`，稳健版在三个标的间等权。模拟买入按卖一价、卖出按买一价成交，每边手续费按成交金额的 `0.6 bp` 计算。下一交易日开盘后分别计算模拟手续费、盈亏和净值。DRY_RUN 不会调用 IB `placeOrder`。
 
-手工 REAL LOC/MOC 支持 `BUY` 和 `SELL`，只允许股票池内股票，并要求 `readonly_mode=false`、`trading_enabled=true`。手工 REAL 专用门禁默认已开启。`SELL` 只能减少当前 IB 多头持仓，数量超过持仓会被拒绝，不允许借此开空。它可以与计划任务的 `dry_run=true` 同时运行；此时计划策略仍为 DRY_RUN，只有手工端点越过模拟开关。系统不会自动平掉手工 REAL 仓位，测试人员必须自行提交 SELL。自动开盘退出只根据自动策略的 IB 成交记录计算数量，明确排除手工 REAL 订单和账户其他持仓。接口还会检查最新行情、活动订单、结算现金和订单金额上限。网页提交前会再次确认；启用前请先完成 DRY_RUN 和 Paper 验证。
+手工 REAL 支持普通 `MKT` / `LMT` 的 `BUY` 和 `SELL`；MKT 使用 DAY 市价单，LMT 必须提供正数限价并使用 DAY 有效期。手工交易只允许股票池内股票，并要求 `readonly_mode=false`、`trading_enabled=true`。手工 REAL 专用门禁默认已开启。`SELL` 只能减少当前 IB 多头持仓，数量超过持仓会被拒绝，不允许借此开空。它可以与计划任务的 `dry_run=true` 同时运行；此时计划策略仍为 DRY_RUN，只有手工端点越过模拟开关。系统不会自动平掉手工 REAL 仓位，测试人员必须自行提交 SELL。自动开盘退出只根据自动策略的 IB 成交记录计算数量，明确排除手工 REAL 订单和账户其他持仓。接口还会检查最新行情、活动订单、结算现金和订单金额上限。网页提交前会再次确认；启用前请先完成 DRY_RUN 和 Paper 验证。
 
 建议今晚混合测试使用以下配置（修改后重启服务）：
 

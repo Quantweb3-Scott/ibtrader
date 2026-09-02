@@ -23,7 +23,7 @@ strategy:
   min_avg_dollar_volume_20d: 1000000000
   min_price: 5
   snapshot_interval_seconds: 10
-  signal_freeze_minutes_before_close: 16
+  signal_freeze_minutes_before_close: 11
   mag7_universe: ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"]
   benchmark_ticker: "QQQ"
   turnover_zscore_lookback: 120

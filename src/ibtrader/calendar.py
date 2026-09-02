@@ -23,7 +23,7 @@ class MarketCalendar:
         exit_submit_after_open_seconds: int = 60,
         fallback_exit_after_open_seconds: int = 120,
         force_exit_after_open_seconds: int = 300,
-        signal_freeze_minutes_before_close: int = 16,
+        signal_freeze_minutes_before_close: int = 11,
     ):
         self.calendar = xcals.get_calendar("XNYS")
         self.exit_submit_after_open_seconds = exit_submit_after_open_seconds

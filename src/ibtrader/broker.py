@@ -228,8 +228,14 @@ class IBGatewayAdapter(BrokerAdapter):
             order.orderType = "MOC"
         elif request.order_type == "LOO":
             order = LimitOrder(request.action, request.quantity, request.limit_price, tif="OPG")
+        elif request.order_type == "LMT":
+            order = LimitOrder(
+                request.action, request.quantity, request.limit_price, tif=request.tif or "DAY"
+            )
+        elif request.order_type == "MKT":
+            order = MarketOrder(request.action, request.quantity, tif=request.tif or "DAY")
         else:
-            order = MarketOrder(request.action, request.quantity, tif=request.tif or "OPG")
+            raise ValueError(f"unsupported order type: {request.order_type}")
         order.orderRef = request.order_ref
         order.account = self.config.account
         trade = self.ib.placeOrder(contract, order)

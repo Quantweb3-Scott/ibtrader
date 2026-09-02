@@ -25,4 +25,4 @@ def test_exit_is_submitted_after_opening_auction():
     assert (triggers["submit_exit"].hour, triggers["submit_exit"].minute) == (9, 31)
     assert (triggers["fallback_exit"].hour, triggers["fallback_exit"].minute) == (9, 32)
     assert (triggers["force_exit"].hour, triggers["force_exit"].minute) == (9, 35)
-    assert (triggers["freeze_entry"].hour, triggers["freeze_entry"].minute) == (15, 44)
+    assert (triggers["freeze_entry"].hour, triggers["freeze_entry"].minute) == (15, 49)

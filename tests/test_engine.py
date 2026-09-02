@@ -260,7 +260,7 @@ async def test_manual_real_order_is_blocked_by_default(tmp_path):
     db.initialize()
     engine = TradingEngine(settings, db, FakeBroker(), AlertManager(settings.alerts, db))
     with pytest.raises(RuntimeError, match="trading_enabled"):
-        await engine.manual_real_order("AAPL", "BUY", 1, "LOC")
+        await engine.manual_real_order("AAPL", "BUY", 1, "MKT")
 
 
 @pytest.mark.asyncio
@@ -274,10 +274,11 @@ async def test_manual_real_buy_bypasses_only_global_dry_run(tmp_path):
     broker = FakeBroker()
     engine = TradingEngine(settings, db, broker, AlertManager(settings.alerts, db))
 
-    order = await engine.manual_real_order("AAPL", "BUY", 2, "MOC")
+    order = await engine.manual_real_order("AAPL", "BUY", 2, "MKT")
 
     assert order is not None
     assert [(request.action, request.quantity) for request in broker.placed] == [("BUY", 2)]
+    assert (broker.placed[0].order_type, broker.placed[0].tif) == ("MKT", "DAY")
     assert db.query("SELECT leg,status FROM strategy_order") == [
         {"leg": "manual_entry", "status": "Submitted"}
     ]
@@ -315,12 +316,30 @@ async def test_manual_real_sell_is_allowed_but_cannot_open_short(tmp_path):
     broker.position_list = [Position("AAPL", 5, 100)]
     engine = TradingEngine(settings, db, broker, AlertManager(settings.alerts, db))
 
-    await engine.manual_real_order("AAPL", "SELL", 3, "LOC")
+    await engine.manual_real_order("AAPL", "SELL", 3, "LMT", 99.123)
     assert broker.placed[0].action == "SELL"
     assert broker.placed[0].quantity == 3
+    assert broker.placed[0].order_type == "LMT"
+    assert broker.placed[0].limit_price == 99.13
 
     with pytest.raises(RuntimeError, match="exceeds the current long position"):
-        await engine.manual_real_order("AAPL", "SELL", 6, "MOC")
+        await engine.manual_real_order("AAPL", "SELL", 6, "MKT")
+
+
+@pytest.mark.asyncio
+async def test_manual_real_rejects_close_orders_and_limit_without_price(tmp_path):
+    settings = Settings()
+    settings.risk.trading_enabled = True
+    settings.risk.manual_real_order_enabled = True
+    settings.ib.readonly_mode = False
+    db = Database(str(tmp_path / "test.db"))
+    db.initialize()
+    engine = TradingEngine(settings, db, FakeBroker(), AlertManager(settings.alerts, db))
+
+    with pytest.raises(RuntimeError, match="MKT or LMT"):
+        await engine.manual_real_order("AAPL", "BUY", 1, "MOC")
+    with pytest.raises(RuntimeError, match="positive limit_price"):
+        await engine.manual_real_order("AAPL", "BUY", 1, "LMT")
 
 
 @pytest.mark.asyncio

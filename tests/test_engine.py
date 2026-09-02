@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from conftest import FakeBroker
@@ -17,6 +17,59 @@ def seed_history(db: Database, tickers: list[str]) -> None:
                 "INSERT INTO ohlcv(ticker,trade_date,open,high,low,close,vol,source) VALUES(?,?,?,?,?,?,?,?)",
                 (ticker, f"{day:04d}", 90, 101, 89, 90, 1_000_000 + day * 1000, "test"),
             )
+
+
+@pytest.mark.asyncio
+async def test_new_dry_run_starts_with_two_visible_funded_accounts(tmp_path):
+    settings = Settings()
+    db = Database(str(tmp_path / "test.db"))
+    db.initialize()
+    broker = FakeBroker()
+    broker.connected = False
+    engine = TradingEngine(settings, db, broker, AlertManager(settings.alerts, db))
+
+    snapshot = await engine.snapshot_dry_run_performance()
+
+    assert len(snapshot["strategies"]) == 2
+    assert {item["normalized_nav"] for item in snapshot["strategies"].values()} == {1.0}
+    assert {item["nav"] for item in snapshot["strategies"].values()} == {
+        settings.risk.initial_strategy_capital_usd
+    }
+    assert all(not item["positions"] for item in snapshot["strategies"].values())
+
+
+@pytest.mark.asyncio
+async def test_startup_backfills_missing_daily_history(tmp_path):
+    settings = Settings()
+    db = Database(str(tmp_path / "test.db"))
+    db.initialize()
+    broker = FakeBroker()
+    requested = []
+
+    async def historical_daily_bars(ticker, days=30):
+        requested.append((ticker, days))
+        return [
+            {
+                "trade_date": str(date(2026, 8, 31) - timedelta(days=offset)),
+                "open": 90,
+                "high": 101,
+                "low": 89,
+                "close": 100,
+                "vol": 1_000_000,
+            }
+            for offset in range(days)
+        ]
+
+    broker.historical_daily_bars = historical_daily_bars
+    engine = TradingEngine(settings, db, broker, AlertManager(settings.alerts, db))
+
+    assert await engine.bootstrap_history(required_bars=3)
+    assert {ticker for ticker, _ in requested} == set(engine.history_symbols())
+    assert {days for _, days in requested} == {13}
+    assert engine.missing_history_symbols(3) == []
+    assert db.query(
+        "SELECT event_type FROM risk_event WHERE event_type='history_bootstrap_completed'"
+    ) == [{"event_type": "history_bootstrap_completed"}]
 
 
 @pytest.mark.asyncio

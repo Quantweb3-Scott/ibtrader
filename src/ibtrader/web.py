@@ -51,6 +51,9 @@ def create_app(settings: Settings | None = None, broker=None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         monitor_task = asyncio.create_task(monitor.run(), name="gateway-monitor")
+        history_task = asyncio.create_task(
+            engine.bootstrap_history_when_connected(), name="history-bootstrap"
+        )
         scheduler_task = asyncio.create_task(scheduler.run(), name="trading-scheduler")
         portfolio_task = asyncio.create_task(engine.portfolio_loop(), name="portfolio-monitor")
         try:
@@ -63,6 +66,7 @@ def create_app(settings: Settings | None = None, broker=None) -> FastAPI:
             scheduler.stop()
             engine.stop_portfolio_loop()
             monitor_task.cancel()
+            history_task.cancel()
             scheduler_task.cancel()
             portfolio_task.cancel()
             await broker.disconnect()
@@ -84,6 +88,8 @@ def create_app(settings: Settings | None = None, broker=None) -> FastAPI:
 
     @app.get("/api/status")
     async def status():
+        if settings.risk.dry_run and not engine.latest_dry_run:
+            engine.latest_dry_run = await engine.snapshot_dry_run_performance()
         health = asdict(monitor.status)
         health["server_time"] = health["server_time"].isoformat() if health["server_time"] else None
         health["last_success"] = (

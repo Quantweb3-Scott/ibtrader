@@ -48,6 +48,8 @@ Webhook 接收 JSON：`event`、`severity`、`message`、`timestamp`、`payload`
 
 唯一持久库为 `sharedata/oversea.db`，启用 WAL。服务启动后从 IB 拉取持仓和 open orders 与本地 `order_ref` 对账；发现未知策略订单或意外持仓立即进入 `HALTED`，不自动开新仓。
 
+服务启动时还会检查 MAG7 与 QQQ 是否各自具备此前 220 个交易日的日线。数据不足时，Gateway 连接成功后会自动从 IB 回补；回补仅接收今天以前的完整日线，完成前依赖 ZTurnover120、SMA100 和 SMA200 的策略保持空仓。正常交易日收盘后仍会增量刷新日线。
+
 ## 测试
 
 ```powershell

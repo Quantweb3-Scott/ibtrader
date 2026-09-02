@@ -273,6 +273,10 @@ class TradingEngine:
             variant_positions
             or self.db.query("SELECT 1 FROM variant_dry_run_fill LIMIT 1")
             or self.db.query("SELECT 1 FROM variant_signal LIMIT 1")
+            or (
+                not self.db.query("SELECT 1 FROM dry_run_position LIMIT 1")
+                and not self.db.query("SELECT 1 FROM dry_run_fill LIMIT 1")
+            )
         ):
             return await self._snapshot_variant_dry_run_performance(variant_positions)
         positions = self.db.query("SELECT * FROM dry_run_position WHERE id=1")
@@ -315,7 +319,15 @@ class TradingEngine:
         return snapshot
 
     async def _snapshot_variant_dry_run_performance(self, positions: list[dict]) -> dict:
-        quotes = await self.broker.quotes(list({row["ticker"] for row in positions})) if positions else []
+        try:
+            quotes = (
+                await self.broker.quotes(list({row["ticker"] for row in positions}))
+                if positions and self.broker.is_connected()
+                else []
+            )
+        except Exception as exc:  # noqa: BLE001 - retain stored marks while Gateway is offline
+            logger.warning("DRY_RUN mark-to-market quote unavailable: %s", exc)
+            quotes = []
         prices = {quote.ticker: quote.last for quote in quotes}
         strategies = {}
         for strategy_id in (ROBUST, AGGRESSIVE):
@@ -547,20 +559,70 @@ class TradingEngine:
             )
         return quotes
 
-    async def refresh_history(self) -> None:
+    def history_symbols(self) -> list[str]:
+        return list(dict.fromkeys([
+            *self.settings.strategy.mag7_universe,
+            self.settings.strategy.benchmark_ticker,
+        ]))
+
+    def missing_history_symbols(self, required_bars: int = 220) -> list[str]:
+        missing = []
+        for ticker in self.history_symbols():
+            rows = self.db.query("SELECT COUNT(*) AS count FROM ohlcv WHERE ticker=?", (ticker,))
+            if not rows or int(rows[0]["count"]) < required_bars:
+                missing.append(ticker)
+        return missing
+
+    async def bootstrap_history(self, required_bars: int = 220) -> bool:
+        """Backfill the prior daily bars required by both strategies on a new host."""
+        missing = self.missing_history_symbols(required_bars)
+        if not missing:
+            return True
+        if not self.broker.is_connected():
+            return False
+        self.db.event(
+            "INFO", "history_bootstrap_started", "启动历史行情回补",
+            {"tickers": missing, "required_bars": required_bars},
+        )
+        await self.refresh_history(missing, required_bars + 10, exclude_today=True)
+        remaining = self.missing_history_symbols(required_bars)
+        if remaining:
+            self.db.event(
+                "WARNING", "history_bootstrap_incomplete", "历史行情回补不完整，策略将保持空仓",
+                {"tickers": remaining, "required_bars": required_bars},
+            )
+            return False
+        self.db.event(
+            "INFO", "history_bootstrap_completed", "历史行情回补完成",
+            {"tickers": missing, "required_bars": required_bars},
+        )
+        return True
+
+    async def bootstrap_history_when_connected(self) -> None:
+        while not self._portfolio_stopped.is_set():
+            if await self.bootstrap_history():
+                return
+            await asyncio.sleep(10)
+
+    async def refresh_history(
+        self,
+        tickers: list[str] | None = None,
+        days: int = 220,
+        *,
+        exclude_today: bool = False,
+    ) -> None:
         if not self.broker.is_connected():
             await self.alerts.send(
                 "history_refresh_failed", "WARNING", "IB Gateway 离线，日线更新已跳过"
             )
             return
-        tickers = list(dict.fromkeys([
-            *self.settings.strategy.universe,
-            self.settings.strategy.benchmark_ticker,
-        ]))
-        for ticker in tickers:
+        requested_tickers = tickers or self.history_symbols()
+        for ticker in requested_tickers:
             try:
-                bars = await self.broker.historical_daily_bars(ticker, 220)
+                bars = await self.broker.historical_daily_bars(ticker, days)
                 for bar in bars:
+                    if exclude_today and str(bar["trade_date"]) >= str(datetime.now(NY).date()):
+                        continue
                     self.db.execute(
                         "INSERT OR REPLACE INTO ohlcv(ticker,trade_date,open,high,low,close,vol,source) VALUES(?,?,?,?,?,?,?,?)",
                         (

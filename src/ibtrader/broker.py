@@ -250,7 +250,8 @@ class IBGatewayAdapter(BrokerAdapter):
         bars = await self.ib.reqHistoricalDataAsync(
             qualified[0],
             endDateTime="",
-            durationStr=f"{max(days, 30)} D",
+            # `days` means trading bars. Request a calendar-day buffer for weekends/holidays.
+            durationStr=f"{max(math.ceil(days * 1.7), 30)} D",
             barSizeSetting="1 day",
             whatToShow="TRADES",
             useRTH=True,
@@ -267,7 +268,7 @@ class IBGatewayAdapter(BrokerAdapter):
                 "vol": bar.volume,
             }
             for bar in bars
-        ]
+        ][-days:]
 
     async def execution_fills(self) -> list[ExecutionFill]:
         result = []

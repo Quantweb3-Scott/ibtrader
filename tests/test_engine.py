@@ -63,7 +63,10 @@ async def test_both_documented_variants_complete_independent_dry_run_cycle(tmp_p
     await engine.verify_exit()
 
     assert db.query("SELECT * FROM variant_dry_run_position") == []
-    assert len(db.query("SELECT * FROM variant_dry_run_fill")) == 8
+    fills = db.query("SELECT action,price FROM variant_dry_run_fill")
+    assert len(fills) == 8
+    assert {row["price"] for row in fills if row["action"] == "BUY"} == {101.0}
+    assert {row["price"] for row in fills if row["action"] == "SELL"} == {99.0}
     assert broker.placed == []
 
 
@@ -194,7 +197,7 @@ async def test_dry_run_entry_and_exit_produce_separate_pnl(tmp_path):
     await engine.verify_exit()
     assert db.query("SELECT * FROM dry_run_position") == []
     snapshot = await engine.snapshot_dry_run_performance()
-    assert snapshot["pnl"] == -2.0
+    assert snapshot["pnl"] == -22.0
 
 
 @pytest.mark.asyncio

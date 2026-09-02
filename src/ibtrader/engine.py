@@ -251,6 +251,12 @@ class TradingEngine:
             abs(quantity) * self.settings.execution.dry_run_commission_per_share_usd,
         )
 
+    @staticmethod
+    def _opposing_price(quote: Quote, action: str) -> float | None:
+        """Return the executable opposing quote: BUY crosses ask; SELL crosses bid."""
+        value = quote.ask if action.upper() == "BUY" else quote.bid
+        return float(value) if value is not None and math.isfinite(value) and value > 0 else None
+
     def dry_run_pnl(self, market_value: float) -> tuple[float, float, float]:
         rows = self.db.query("SELECT action,quantity,price,commission FROM dry_run_fill")
         commissions = sum(float(row["commission"]) for row in rows)
@@ -941,11 +947,21 @@ class TradingEngine:
             variant_positions = self.db.query("SELECT * FROM variant_dry_run_position")
             if variant_positions:
                 tickers = list({row["ticker"] for row in variant_positions})
-                prices = {quote.ticker: quote.last for quote in await self.broker.quotes(tickers)}
+                prices = {
+                    quote.ticker: price
+                    for quote in await self.broker.quotes(tickers)
+                    if (price := self._opposing_price(quote, "SELL")) is not None
+                }
                 for position in variant_positions:
                     strategy_id = position["strategy_id"]
                     price = prices.get(position["ticker"])
                     if price is None:
+                        self.db.event(
+                            "WARNING",
+                            "dry_run_exit_bid_missing",
+                            "DRY_RUN 开盘退出缺少有效买一价，未模拟成交",
+                            {"strategy_id": strategy_id, "ticker": position["ticker"]},
+                        )
                         continue
                     orders = self.db.query(
                         "SELECT * FROM strategy_order WHERE leg=? AND ticker=? AND status='DRY_RUN' ORDER BY submitted_ts_utc DESC LIMIT 1",
@@ -981,7 +997,15 @@ class TradingEngine:
                     )
                     if order_rows:
                         order = order_rows[0]
-                        price = quotes[0].last
+                        price = self._opposing_price(quotes[0], "SELL")
+                        if price is None:
+                            await self.alerts.send(
+                                "dry_run_exit_bid_missing",
+                                "WARNING",
+                                "DRY_RUN 开盘退出缺少有效买一价，未模拟成交",
+                                {"ticker": position["ticker"]},
+                            )
+                            return
                         commission = self.dry_run_commission(position["quantity"])
                         self.db.execute(
                             "INSERT OR IGNORE INTO dry_run_fill VALUES(?,?,?,?,?,?,?,?)",
@@ -1045,13 +1069,23 @@ class TradingEngine:
                 (f"{AGGRESSIVE}:%", f"{ROBUST}:%"),
             )
             if variant_orders:
-                prices = {quote.ticker: quote.last for quote in await self.broker.quotes(
-                    list({order["ticker"] for order in variant_orders})
-                )}
+                prices = {
+                    quote.ticker: price
+                    for quote in await self.broker.quotes(
+                        list({order["ticker"] for order in variant_orders})
+                    )
+                    if (price := self._opposing_price(quote, "BUY")) is not None
+                }
                 filled = 0
                 for order in variant_orders:
                     price = prices.get(order["ticker"])
                     if price is None:
+                        self.db.event(
+                            "WARNING",
+                            "dry_run_entry_ask_missing",
+                            "DRY_RUN 收盘入场缺少有效卖一价，未模拟成交",
+                            {"order_ref": order["order_ref"], "ticker": order["ticker"]},
+                        )
                         continue
                     strategy_id = str(order["order_ref"]).split(":", 1)[0]
                     commission = self.dry_run_commission(order["quantity"])
@@ -1080,7 +1114,16 @@ class TradingEngine:
             if not quotes:
                 self.transition(TradingState.BUY_NOT_FILLED, "DRY_RUN entry quote unavailable")
                 return
-            price = quotes[0].last
+            price = self._opposing_price(quotes[0], "BUY")
+            if price is None:
+                self.transition(TradingState.BUY_NOT_FILLED, "DRY_RUN entry ask unavailable")
+                await self.alerts.send(
+                    "dry_run_entry_ask_missing",
+                    "WARNING",
+                    "DRY_RUN 收盘入场缺少有效卖一价，未模拟成交",
+                    {"ticker": order["ticker"]},
+                )
+                return
             can_fill = order["order_type"] == "MOC" or (
                 order["limit_price"] is not None and price <= float(order["limit_price"])
             )

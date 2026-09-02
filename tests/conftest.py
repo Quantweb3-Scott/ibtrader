@@ -35,7 +35,7 @@ class FakeBroker(BrokerAdapter):
 
     async def quotes(self, tickers):
         return [
-            Quote(t, 100 + i, 1_000_000 * (i + 1), 99, 101, datetime.now(UTC))
+            Quote(t, 100 + i, 1_000_000 * (i + 1), 99, 101, datetime.now(UTC), False, 90)
             for i, t in enumerate(tickers)
         ]
 

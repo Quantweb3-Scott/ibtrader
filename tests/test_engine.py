@@ -11,11 +11,11 @@ from ibtrader.models import ExecutionFill, Position
 
 
 def seed_history(db: Database, tickers: list[str]) -> None:
-    for ticker in tickers:
-        for day in range(1, 21):
+    for ticker in [*tickers, "QQQ"]:
+        for day in range(1, 200):
             db.execute(
                 "INSERT INTO ohlcv(ticker,trade_date,open,high,low,close,vol,source) VALUES(?,?,?,?,?,?,?,?)",
-                (ticker, f"2026-08-{day:02d}", 100, 101, 99, 100, 20_000_000, "test"),
+                (ticker, f"{day:04d}", 90, 101, 89, 90, 1_000_000 + day * 1000, "test"),
             )
 
 
@@ -31,7 +31,39 @@ async def test_dry_run_records_order_without_broker_submission(tmp_path):
     engine.account_synced = True
     await engine.freeze_signal_and_enter(date(2026, 8, 31))
     orders = db.query("SELECT * FROM strategy_order")
-    assert len(orders) == 1 and orders[0]["status"] == "DRY_RUN"
+    assert len(orders) == 4
+    assert {order["status"] for order in orders} == {"DRY_RUN"}
+    assert {order["order_type"] for order in orders} == {"MOC"}
+    assert broker.placed == []
+
+
+@pytest.mark.asyncio
+async def test_both_documented_variants_complete_independent_dry_run_cycle(tmp_path):
+    settings = Settings()
+    settings.risk.trading_enabled = True
+    db = Database(str(tmp_path / "test.db"))
+    db.initialize()
+    seed_history(db, settings.strategy.universe)
+    broker = FakeBroker()
+    engine = TradingEngine(settings, db, broker, AlertManager(settings.alerts, db))
+    engine.account_synced = True
+
+    await engine.freeze_signal_and_enter(date(2026, 8, 31))
+    await engine.verify_entry()
+
+    positions = db.query(
+        "SELECT strategy_id,ticker,quantity FROM variant_dry_run_position ORDER BY strategy_id,ticker"
+    )
+    assert len(positions) == 4
+    assert len({row["strategy_id"] for row in positions}) == 2
+    assert all(row["quantity"] > 0 for row in positions)
+    assert sum(row["strategy_id"].endswith("sma100") for row in positions) == 3
+
+    await engine.submit_open_exit(date(2026, 9, 1))
+    await engine.verify_exit()
+
+    assert db.query("SELECT * FROM variant_dry_run_position") == []
+    assert len(db.query("SELECT * FROM variant_dry_run_fill")) == 8
     assert broker.placed == []
 
 
@@ -45,9 +77,7 @@ async def test_disabled_trading_records_skipped_signal(tmp_path):
     engine = TradingEngine(settings, db, broker, AlertManager(settings.alerts, db))
     engine.account_synced = True
     await engine.freeze_signal_and_enter(date(2026, 8, 31))
-    assert (
-        db.query("SELECT skip_reason FROM strategy_signal")[0]["skip_reason"] == "trading_disabled"
-    )
+    assert {row["skip_reason"] for row in db.query("SELECT skip_reason FROM variant_signal")} == {"trading_disabled"}
     assert db.query("SELECT * FROM strategy_order") == []
 
 
@@ -61,10 +91,7 @@ async def test_missing_history_blocks_entry(tmp_path):
     engine = TradingEngine(settings, db, broker, AlertManager(settings.alerts, db))
     engine.account_synced = True
     await engine.freeze_signal_and_enter(date(2026, 8, 31))
-    assert (
-        db.query("SELECT skip_reason FROM strategy_signal")[0]["skip_reason"]
-        == "fewer_than_3_eligible"
-    )
+    assert {row["skip_reason"] for row in db.query("SELECT skip_reason FROM variant_signal")} == {"qqq_history_unavailable"}
 
 
 @pytest.mark.asyncio
@@ -79,7 +106,7 @@ async def test_non_strategy_position_does_not_block_entry(tmp_path):
     engine = TradingEngine(settings, db, broker, AlertManager(settings.alerts, db))
     engine.account_synced = True
     await engine.freeze_signal_and_enter(date(2026, 8, 31))
-    assert db.query("SELECT status FROM strategy_order")[0]["status"] == "DRY_RUN"
+    assert {row["status"] for row in db.query("SELECT status FROM strategy_order")} == {"DRY_RUN"}
 
 
 def test_strategy_pnl_includes_ib_commission(tmp_path):
@@ -216,9 +243,8 @@ async def test_scheduled_order_stays_dry_run_when_manual_real_is_enabled(tmp_pat
     await engine.freeze_signal_and_enter(date(2026, 8, 31))
 
     assert broker.placed == []
-    assert db.query("SELECT leg,status FROM strategy_order") == [
-        {"leg": "entry", "status": "DRY_RUN"}
-    ]
+    assert len(db.query("SELECT leg,status FROM strategy_order")) == 4
+    assert {row["status"] for row in db.query("SELECT leg,status FROM strategy_order")} == {"DRY_RUN"}
 
 
 @pytest.mark.asyncio

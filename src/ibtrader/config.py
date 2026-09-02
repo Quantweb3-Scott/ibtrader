@@ -35,10 +35,14 @@ class StrategyConfig(BaseModel):
     min_price: float = 5
     snapshot_interval_seconds: int = 10
     signal_freeze_minutes_before_close: int = 16
+    mag7_universe: list[str] = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"]
+    benchmark_ticker: str = "QQQ"
+    turnover_zscore_lookback: int = 120
 
 
 class ExecutionConfig(BaseModel):
-    close_entry_mode: Literal["LOC", "MOC"] = "LOC"
+    # Both documented turnover variants track the research close with MOC.
+    close_entry_mode: Literal["MOC"] = "MOC"
     open_exit_mode: Literal["MKT"] = "MKT"
     max_entry_slippage_bps: float = 20
     max_expected_cost_bps: float = 5

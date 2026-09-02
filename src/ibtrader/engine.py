@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import math
+import statistics
 import uuid
 from dataclasses import asdict
 from datetime import UTC, date, datetime
@@ -19,6 +20,8 @@ from .risk import RiskManager
 logger = logging.getLogger(__name__)
 NY = ZoneInfo("America/New_York")
 FINAL_ORDER_STATUSES = {"Filled", "Cancelled", "ApiCancelled", "Inactive"}
+AGGRESSIVE = "mag7_overnight_z120_top1_qqq_sma200"
+ROBUST = "mag7_overnight_z120_top3_intraday_up_qqq_sma100"
 
 
 class TradingEngine:
@@ -261,6 +264,9 @@ class TradingEngine:
         return pnl, cashflow, commissions
 
     async def snapshot_dry_run_performance(self) -> dict:
+        variant_positions = self.db.query("SELECT * FROM variant_dry_run_position")
+        if variant_positions or self.db.query("SELECT 1 FROM variant_dry_run_fill LIMIT 1"):
+            return await self._snapshot_variant_dry_run_performance(variant_positions)
         positions = self.db.query("SELECT * FROM dry_run_position WHERE id=1")
         market_value = 0.0
         position = None
@@ -300,10 +306,66 @@ class TradingEngine:
         )
         return snapshot
 
+    async def _snapshot_variant_dry_run_performance(self, positions: list[dict]) -> dict:
+        quotes = await self.broker.quotes(list({row["ticker"] for row in positions})) if positions else []
+        prices = {quote.ticker: quote.last for quote in quotes}
+        strategies = {}
+        for strategy_id in (ROBUST, AGGRESSIVE):
+            strategy_positions = [row for row in positions if row["strategy_id"] == strategy_id]
+            market_value = 0.0
+            rendered_positions = []
+            for row in strategy_positions:
+                price = prices.get(row["ticker"], float(row["market_price"]))
+                value = price * int(row["quantity"])
+                market_value += value
+                self.db.execute(
+                    "UPDATE variant_dry_run_position SET market_price=? WHERE strategy_id=? AND ticker=?",
+                    (price, strategy_id, row["ticker"]),
+                )
+                rendered_positions.append({**row, "market_price": price, "market_value": value})
+            fills = self.db.query(
+                "SELECT action,quantity,price,commission FROM variant_dry_run_fill WHERE strategy_id=?",
+                (strategy_id,),
+            )
+            commissions = sum(float(row["commission"]) for row in fills)
+            cashflow = sum(float(row["quantity"]) * float(row["price"]) *
+                           (1 if row["action"] == "SELL" else -1) for row in fills)
+            capital = self.settings.risk.initial_strategy_capital_usd
+            pnl = cashflow + market_value - commissions
+            nav = capital + pnl
+            snapshot_time = utc_now()
+            self.db.execute(
+                "INSERT OR REPLACE INTO variant_dry_run_performance VALUES(?,?,?,?,?,?,?,?)",
+                (snapshot_time, strategy_id, nav, nav / capital if capital else 1.0,
+                 pnl, capital + cashflow - commissions, market_value, commissions),
+            )
+            strategies[strategy_id] = {
+                "strategy_id": strategy_id, "nav": nav,
+                "normalized_nav": nav / capital if capital else 1.0, "pnl": pnl,
+                "cash": capital + cashflow - commissions, "market_value": market_value,
+                "commissions": commissions, "positions": rendered_positions,
+            }
+        total_capital = self.settings.risk.initial_strategy_capital_usd * len(strategies)
+        total_nav = sum(item["nav"] for item in strategies.values())
+        all_positions = [position for item in strategies.values() for position in item["positions"]]
+        return {
+            "timestamp": utc_now(), "nav": total_nav,
+            "normalized_nav": total_nav / total_capital if total_capital else 1.0,
+            "pnl": sum(item["pnl"] for item in strategies.values()),
+            "cash": sum(item["cash"] for item in strategies.values()),
+            "market_value": sum(item["market_value"] for item in strategies.values()),
+            "commissions": sum(item["commissions"] for item in strategies.values()),
+            "positions": all_positions, "position": all_positions[0] if len(all_positions) == 1 else None,
+            "strategies": strategies,
+        }
+
     async def reset_dry_run(self) -> None:
         self.db.execute("DELETE FROM dry_run_position")
         self.db.execute("DELETE FROM dry_run_fill")
         self.db.execute("DELETE FROM dry_run_performance")
+        self.db.execute("DELETE FROM variant_dry_run_position")
+        self.db.execute("DELETE FROM variant_dry_run_fill")
+        self.db.execute("DELETE FROM variant_dry_run_performance")
         self.db.event("INFO", "dry_run_reset", "DRY_RUN 盈亏、净值和模拟仓位已重置")
 
     async def manual_real_order(
@@ -453,7 +515,11 @@ class TradingEngine:
         return snapshot
 
     async def snapshot_quotes(self, trade_date: date | None = None) -> list[Quote]:
-        quotes = await self.broker.quotes(self.settings.strategy.universe)
+        tickers = list(dict.fromkeys([
+            *self.settings.strategy.universe,
+            self.settings.strategy.benchmark_ticker,
+        ]))
+        quotes = await self.broker.quotes(tickers)
         now_ny = datetime.now(UTC).astimezone(NY)
         day = trade_date or now_ny.date()
         for quote in quotes:
@@ -479,9 +545,13 @@ class TradingEngine:
                 "history_refresh_failed", "WARNING", "IB Gateway 离线，日线更新已跳过"
             )
             return
-        for ticker in self.settings.strategy.universe:
+        tickers = list(dict.fromkeys([
+            *self.settings.strategy.universe,
+            self.settings.strategy.benchmark_ticker,
+        ]))
+        for ticker in tickers:
             try:
-                bars = await self.broker.historical_daily_bars(ticker, 35)
+                bars = await self.broker.historical_daily_bars(ticker, 220)
                 for bar in bars:
                     self.db.execute(
                         "INSERT OR REPLACE INTO ohlcv(ticker,trade_date,open,high,low,close,vol,source) VALUES(?,?,?,?,?,?,?,?)",
@@ -536,11 +606,71 @@ class TradingEngine:
         ) / len(rows)
         return avg_dollar_volume >= self.settings.strategy.min_avg_dollar_volume_20d
 
+    def _turnover_zscore(self, quote: Quote) -> float | None:
+        lookback = self.settings.strategy.turnover_zscore_lookback
+        rows = self.db.query(
+            "SELECT close,vol FROM ohlcv WHERE ticker=? ORDER BY trade_date DESC LIMIT ?",
+            (quote.ticker, lookback - 1),
+        )
+        history = [float(row["close"] or 0) * float(row["vol"] or 0) for row in rows]
+        if len(history) < lookback - 1:
+            return None
+        sample = [quote.dollar_turnover, *history]
+        deviation = statistics.pstdev(sample)
+        return (quote.dollar_turnover - statistics.fmean(sample)) / deviation if deviation else 0.0
+
+    def _benchmark_above_sma(self, benchmark: Quote, window: int) -> bool | None:
+        rows = self.db.query(
+            "SELECT close FROM ohlcv WHERE ticker=? ORDER BY trade_date DESC LIMIT ?",
+            (benchmark.ticker, window - 1),
+        )
+        closes = [float(row["close"] or 0) for row in rows]
+        if len(closes) < window - 1:
+            return None
+        return benchmark.last > statistics.fmean([benchmark.last, *closes])
+
+    def _variant_candidates(self, quotes: list[Quote]) -> tuple[dict[str, list[tuple[Quote, float]]], dict[str, str | None]]:
+        by_ticker = {quote.ticker: quote for quote in quotes}
+        benchmark = by_ticker.get(self.settings.strategy.benchmark_ticker)
+        scores: list[tuple[Quote, float]] = []
+        for ticker in self.settings.strategy.mag7_universe:
+            quote = by_ticker.get(ticker)
+            if quote is None or quote.last < self.settings.strategy.min_price or quote.halted:
+                continue
+            score = self._turnover_zscore(quote)
+            if score is not None:
+                scores.append((quote, score))
+        scores.sort(key=lambda item: item[1], reverse=True)
+        aggressive_gate = self._benchmark_above_sma(benchmark, 200) if benchmark else None
+        robust_gate = self._benchmark_above_sma(benchmark, 100) if benchmark else None
+        robust_scores = [
+            item for item in scores
+            if item[0].session_open is not None and item[0].last > item[0].session_open
+        ]
+        candidates = {
+            AGGRESSIVE: scores[:1] if aggressive_gate else [],
+            ROBUST: robust_scores[:3] if robust_gate and len(robust_scores) >= 3 else [],
+        }
+        reasons = {
+            AGGRESSIVE: None if candidates[AGGRESSIVE] else (
+                "qqq_history_unavailable" if aggressive_gate is None else
+                "qqq_below_sma200" if not aggressive_gate else "zscore_history_unavailable"
+            ),
+            ROBUST: None if candidates[ROBUST] else (
+                "qqq_history_unavailable" if robust_gate is None else
+                "qqq_below_sma100" if not robust_gate else "fewer_than_3_intraday_up"
+            ),
+        }
+        return candidates, reasons
+
     async def freeze_signal_and_enter(self, session_date: date) -> None:
         async with self._lock:
             if self.state == TradingState.HALTED:
                 return
             quotes = await self.snapshot_quotes(session_date)
+            if self.settings.risk.dry_run:
+                await self._freeze_variant_dry_runs(session_date, quotes)
+                return
             ranked = self._rank(quotes)
             now = datetime.now(UTC)
             if len(ranked) < 3:
@@ -592,6 +722,45 @@ class TradingEngine:
                 f"turnover_top1:{session_date}:entry:{selected.ticker}:1",
             )
             await self._submit(session_date, "entry", request)
+
+    async def _freeze_variant_dry_runs(self, session_date: date, quotes: list[Quote]) -> None:
+        candidates, reasons = self._variant_candidates(quotes)
+        now = datetime.now(UTC)
+        any_orders = False
+        for strategy_id, selected in candidates.items():
+            payload = [
+                {"ticker": quote.ticker, "zturnover120": score, "last": quote.last,
+                 "session_open": quote.session_open}
+                for quote, score in selected
+            ]
+            allowed = bool(selected) and self.settings.risk.trading_enabled and self.account_synced
+            reason = reasons[strategy_id]
+            if selected and not self.settings.risk.trading_enabled:
+                reason = "trading_disabled"
+            elif selected and not self.account_synced:
+                reason = "account_not_synchronized"
+            self.db.execute(
+                "INSERT OR REPLACE INTO variant_signal VALUES(?,?,?,?,?,?,?)",
+                (str(session_date), strategy_id, json.dumps([x[0].ticker for x in selected]),
+                 now.isoformat(), json.dumps(payload), int(allowed), reason),
+            )
+            if not allowed:
+                continue
+            per_name_capital = self.settings.risk.initial_strategy_capital_usd / len(selected)
+            for sequence, (quote, _) in enumerate(selected, 1):
+                shares = math.floor(per_name_capital / quote.last)
+                if shares < 1:
+                    continue
+                request = OrderRequest(
+                    quote.ticker, "BUY", shares, "MOC", "DAY", None,
+                    f"{strategy_id}:{session_date}:entry:{quote.ticker}:{sequence}",
+                )
+                await self._submit(session_date, f"entry:{strategy_id}", request)
+                any_orders = True
+        if any_orders:
+            self.transition(TradingState.BUY_SUBMITTED, "dual-variant DRY_RUN MOC orders recorded")
+        else:
+            self.transition(TradingState.IDLE, "both DRY_RUN variants held cash")
 
     async def _record_signal(
         self, day: date, ranked: list[Quote], tradeable: bool, skip: str | None
@@ -721,6 +890,15 @@ class TradingEngine:
 
     async def submit_open_exit(self, session_date: date) -> None:
         if self.settings.risk.dry_run:
+            variant_positions = self.db.query("SELECT * FROM variant_dry_run_position")
+            if variant_positions:
+                for position in variant_positions:
+                    request = OrderRequest(
+                        position["ticker"], "SELL", int(position["quantity"]), "MKT", "DAY", None,
+                        f"{position['strategy_id']}:{session_date}:dry_exit:{position['ticker']}:1",
+                    )
+                    await self._submit(session_date, f"exit:{position['strategy_id']}", request)
+                return
             simulated = self.db.query("SELECT * FROM dry_run_position WHERE id=1")
             if simulated:
                 position = simulated[0]
@@ -760,6 +938,34 @@ class TradingEngine:
 
     async def verify_exit(self, force: bool = False) -> None:
         if self.settings.risk.dry_run:
+            variant_positions = self.db.query("SELECT * FROM variant_dry_run_position")
+            if variant_positions:
+                tickers = list({row["ticker"] for row in variant_positions})
+                prices = {quote.ticker: quote.last for quote in await self.broker.quotes(tickers)}
+                for position in variant_positions:
+                    strategy_id = position["strategy_id"]
+                    price = prices.get(position["ticker"])
+                    if price is None:
+                        continue
+                    orders = self.db.query(
+                        "SELECT * FROM strategy_order WHERE leg=? AND ticker=? AND status='DRY_RUN' ORDER BY submitted_ts_utc DESC LIMIT 1",
+                        (f"exit:{strategy_id}", position["ticker"]),
+                    )
+                    if not orders:
+                        continue
+                    order = orders[0]
+                    commission = self.dry_run_commission(position["quantity"])
+                    self.db.execute(
+                        "INSERT OR IGNORE INTO variant_dry_run_fill VALUES(?,?,?,?,?,?,?,?,?)",
+                        (f"sim:{order['local_order_id']}", strategy_id, order["order_ref"],
+                         position["ticker"], "SELL", position["quantity"], price, commission, utc_now()),
+                    )
+                    self.db.execute("UPDATE strategy_order SET status='SIM_FILLED',updated_ts_utc=? WHERE local_order_id=?", (utc_now(), order["local_order_id"]),)
+                    self.db.execute("DELETE FROM variant_dry_run_position WHERE strategy_id=? AND ticker=?", (strategy_id, position["ticker"]),)
+                self.latest_dry_run = await self.snapshot_dry_run_performance()
+                if not self.db.query("SELECT 1 FROM variant_dry_run_position LIMIT 1"):
+                    self.transition(TradingState.FLAT_CONFIRMED, "both DRY_RUN variants are flat")
+                return
             simulated = self.db.query("SELECT * FROM dry_run_position WHERE id=1")
             if simulated:
                 position = simulated[0]
@@ -833,6 +1039,37 @@ class TradingEngine:
 
     async def verify_entry(self) -> None:
         if self.settings.risk.dry_run:
+            variant_orders = self.db.query(
+                "SELECT * FROM strategy_order WHERE action='BUY' AND status='DRY_RUN' "
+                "AND (order_ref LIKE ? OR order_ref LIKE ?) ORDER BY submitted_ts_utc",
+                (f"{AGGRESSIVE}:%", f"{ROBUST}:%"),
+            )
+            if variant_orders:
+                prices = {quote.ticker: quote.last for quote in await self.broker.quotes(
+                    list({order["ticker"] for order in variant_orders})
+                )}
+                filled = 0
+                for order in variant_orders:
+                    price = prices.get(order["ticker"])
+                    if price is None:
+                        continue
+                    strategy_id = str(order["order_ref"]).split(":", 1)[0]
+                    commission = self.dry_run_commission(order["quantity"])
+                    self.db.execute(
+                        "INSERT OR IGNORE INTO variant_dry_run_fill VALUES(?,?,?,?,?,?,?,?,?)",
+                        (f"sim:{order['local_order_id']}", strategy_id, order["order_ref"],
+                         order["ticker"], "BUY", order["quantity"], price, commission, utc_now()),
+                    )
+                    self.db.execute(
+                        "INSERT OR REPLACE INTO variant_dry_run_position VALUES(?,?,?,?,?,?,?)",
+                        (strategy_id, order["ticker"], order["quantity"], price, price, utc_now(), order["order_ref"]),
+                    )
+                    self.db.execute("UPDATE strategy_order SET status='SIM_FILLED',updated_ts_utc=? WHERE local_order_id=?", (utc_now(), order["local_order_id"]),)
+                    filled += 1
+                self.latest_dry_run = await self.snapshot_dry_run_performance()
+                if filled:
+                    self.transition(TradingState.HOLD_OVERNIGHT, "both DRY_RUN variants MOC-filled")
+                return
             orders = self.db.query(
                 "SELECT * FROM strategy_order WHERE action='BUY' AND status='DRY_RUN' ORDER BY submitted_ts_utc DESC LIMIT 1"
             )

@@ -34,6 +34,10 @@ CREATE TABLE IF NOT EXISTS turnover_test_run (run_id TEXT PRIMARY KEY, started_t
 CREATE TABLE IF NOT EXISTS dry_run_position (id INTEGER PRIMARY KEY CHECK(id=1), ticker TEXT NOT NULL, quantity INTEGER NOT NULL, average_cost REAL NOT NULL, market_price REAL NOT NULL, opened_ts_utc TEXT NOT NULL, entry_order_ref TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS dry_run_fill (execution_id TEXT PRIMARY KEY, order_ref TEXT NOT NULL, ticker TEXT NOT NULL, action TEXT NOT NULL, quantity REAL NOT NULL, price REAL NOT NULL, commission REAL NOT NULL, fill_ts_utc TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS dry_run_performance (ts_utc TEXT PRIMARY KEY, nav REAL NOT NULL, normalized_nav REAL NOT NULL, pnl REAL NOT NULL, cash REAL NOT NULL, market_value REAL NOT NULL, commissions REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS variant_signal (trade_date TEXT NOT NULL, strategy_id TEXT NOT NULL, selected_tickers_json TEXT NOT NULL, signal_ts_utc TEXT NOT NULL, scores_json TEXT NOT NULL, is_tradeable INTEGER NOT NULL, skip_reason TEXT, PRIMARY KEY(trade_date, strategy_id));
+CREATE TABLE IF NOT EXISTS variant_dry_run_position (strategy_id TEXT NOT NULL, ticker TEXT NOT NULL, quantity INTEGER NOT NULL, average_cost REAL NOT NULL, market_price REAL NOT NULL, opened_ts_utc TEXT NOT NULL, entry_order_ref TEXT NOT NULL, PRIMARY KEY(strategy_id, ticker));
+CREATE TABLE IF NOT EXISTS variant_dry_run_fill (execution_id TEXT PRIMARY KEY, strategy_id TEXT NOT NULL, order_ref TEXT NOT NULL, ticker TEXT NOT NULL, action TEXT NOT NULL, quantity REAL NOT NULL, price REAL NOT NULL, commission REAL NOT NULL, fill_ts_utc TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS variant_dry_run_performance (ts_utc TEXT NOT NULL, strategy_id TEXT NOT NULL, nav REAL NOT NULL, normalized_nav REAL NOT NULL, pnl REAL NOT NULL, cash REAL NOT NULL, market_value REAL NOT NULL, commissions REAL NOT NULL, PRIMARY KEY(ts_utc, strategy_id));
 CREATE INDEX IF NOT EXISTS idx_risk_event_ts ON risk_event(ts_utc DESC);
 CREATE INDEX IF NOT EXISTS idx_order_trade_date ON strategy_order(trade_date);
 CREATE INDEX IF NOT EXISTS idx_portfolio_ts ON portfolio_snapshot(ts_utc DESC);

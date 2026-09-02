@@ -152,7 +152,16 @@ class IBGatewayAdapter(BrokerAdapter):
             if last is None or last <= 0 or volume < 0:
                 continue
             result.append(
-                Quote(symbol, last, volume, _number(ticker.bid), _number(ticker.ask), now, False)
+                Quote(
+                    symbol,
+                    last,
+                    volume,
+                    _number(ticker.bid),
+                    _number(ticker.ask),
+                    now,
+                    False,
+                    _number(getattr(ticker, "open", None)),
+                )
             )
         return result
 

@@ -30,6 +30,7 @@ class Quote:
     ask: float | None
     timestamp: datetime
     halted: bool = False
+    session_open: float | None = None
 
     @property
     def dollar_turnover(self) -> float:

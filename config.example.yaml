@@ -24,9 +24,12 @@ strategy:
   min_price: 5
   snapshot_interval_seconds: 10
   signal_freeze_minutes_before_close: 16
+  mag7_universe: ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"]
+  benchmark_ticker: "QQQ"
+  turnover_zscore_lookback: 120
 
 execution:
-  close_entry_mode: "LOC"
+  close_entry_mode: "MOC"
   open_exit_mode: "MKT"
   max_entry_slippage_bps: 20
   max_expected_cost_bps: 5

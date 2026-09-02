@@ -455,6 +455,12 @@ class TradingEngine:
         ):
             raise RuntimeError("manual order exceeds cash or configured notional limit")
         trade_day = datetime.now(NY).date()
+        ref_prefix = f"turnover_top1:{trade_day}:manual_{action.lower()}:{ticker}:"
+        rows = self.db.query(
+            "SELECT COUNT(*) AS count FROM strategy_order WHERE trade_date=? AND order_ref LIKE ?",
+            (str(trade_day), ref_prefix + "%"),
+        )
+        sequence = (int(rows[0]["count"]) if rows else 0) + 1
         request = OrderRequest(
             ticker,
             action,
@@ -462,7 +468,7 @@ class TradingEngine:
             order_type,
             "DAY",
             limit_price if order_type == "LMT" else None,
-            f"turnover_top1:{trade_day}:manual_{action.lower()}:{ticker}:1",
+            f"{ref_prefix}{sequence}",
         )
         return await self._submit(
             trade_day,

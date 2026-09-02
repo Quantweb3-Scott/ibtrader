@@ -18,6 +18,13 @@ from .models import (
 )
 
 
+def _ib_duration_days(calendar_days: int) -> str:
+    """Format a calendar-day span as an IB durationStr, switching to years past 365 D."""
+    if calendar_days <= 365:
+        return f"{calendar_days} D"
+    return f"{math.ceil(calendar_days / 365)} Y"
+
+
 class BrokerAdapter(ABC):
     @abstractmethod
     async def connect(self) -> None: ...
@@ -257,7 +264,8 @@ class IBGatewayAdapter(BrokerAdapter):
             qualified[0],
             endDateTime="",
             # `days` means trading bars. Request a calendar-day buffer for weekends/holidays.
-            durationStr=f"{max(math.ceil(days * 1.7), 30)} D",
+            # IB rejects day-based durations longer than 365 D; those must use "Y".
+            durationStr=_ib_duration_days(max(math.ceil(days * 1.7), 30)),
             barSizeSetting="1 day",
             whatToShow="TRADES",
             useRTH=True,

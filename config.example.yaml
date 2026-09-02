@@ -1,0 +1,59 @@
+app:
+  host: "0.0.0.0"
+  port: 8089
+  database_path: "sharedata/oversea.db"
+  log_level: "INFO"
+  api_token: "change-me"
+
+ib:
+  host: "127.0.0.1"
+  port: 4002
+  client_id: 71
+  account: "YOUR_IB_ACCOUNT"
+  readonly_mode: false
+  connect_timeout_seconds: 8
+  market_data_wait_seconds: 8
+  reconnect_backoff_seconds: [1, 2, 5, 10, 30]
+
+strategy:
+  timezone: "America/New_York"
+  trade_early_close_days: false
+  universe: ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "MU", "SPCX"]
+  min_listed_trading_days: 20
+  min_avg_dollar_volume_20d: 1000000000
+  min_price: 5
+  snapshot_interval_seconds: 10
+  signal_freeze_minutes_before_close: 16
+
+execution:
+  close_entry_mode: "LOC"
+  open_exit_mode: "MKT"
+  max_entry_slippage_bps: 20
+  max_expected_cost_bps: 5
+  exit_submit_after_open_seconds: 60
+  fallback_exit_after_open_seconds: 120
+  force_exit_after_open_seconds: 300
+  dry_run_commission_per_share_usd: 0.005
+  dry_run_min_commission_usd: 1.0
+
+risk:
+  trading_enabled: false
+  dry_run: true
+  manual_real_order_enabled: true
+  cash_reserve_usd: 2500
+  initial_strategy_capital_usd: 3000
+  max_strategy_capital_usd: 6000
+  max_account_exposure_pct: 0.70
+  max_leverage: 1.0
+  min_order_notional_usd: 1000
+  max_single_order_notional_usd: 6000
+  max_position_notional_usd: 6000
+  max_one_day_strategy_loss_usd: 500
+  max_strategy_drawdown_pct: 0.20
+  max_account_drawdown_pct: 0.10
+
+alerts:
+  gateway_down_after_seconds: 60
+  webhook_url: null
+  webhook_bearer_token: null
+  cooldown_seconds: 300

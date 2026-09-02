@@ -1,0 +1,3 @@
+python-preference = "managed"
+python-downloads = "automatic"
+link-mode = "copy"

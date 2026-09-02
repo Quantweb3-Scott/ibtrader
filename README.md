@@ -78,7 +78,7 @@ risk:
   dry_run: true
 ```
 
-收盘时为进攻版、稳健版分别模拟 MOC 成交并维护独立账本；每个版本各自使用 `initial_strategy_capital_usd`，稳健版在三个标的间等权。下一交易日开盘检查时使用开盘后行情代理成交，分别计算模拟手续费、盈亏和净值。DRY_RUN 不会调用 IB `placeOrder`。
+收盘时为进攻版、稳健版分别模拟 MOC 成交并维护独立账本；每个版本各自使用 `initial_strategy_capital_usd`，稳健版在三个标的间等权。模拟买入按卖一价、卖出按买一价成交，每边手续费按成交金额的 `0.6 bp` 计算。下一交易日开盘后分别计算模拟手续费、盈亏和净值。DRY_RUN 不会调用 IB `placeOrder`。
 
 手工 REAL LOC/MOC 支持 `BUY` 和 `SELL`，只允许股票池内股票，并要求 `readonly_mode=false`、`trading_enabled=true`。手工 REAL 专用门禁默认已开启。`SELL` 只能减少当前 IB 多头持仓，数量超过持仓会被拒绝，不允许借此开空。它可以与计划任务的 `dry_run=true` 同时运行；此时计划策略仍为 DRY_RUN，只有手工端点越过模拟开关。系统不会自动平掉手工 REAL 仓位，测试人员必须自行提交 SELL。自动开盘退出只根据自动策略的 IB 成交记录计算数量，明确排除手工 REAL 订单和账户其他持仓。接口还会检查最新行情、活动订单、结算现金和订单金额上限。网页提交前会再次确认；启用前请先完成 DRY_RUN 和 Paper 验证。
 

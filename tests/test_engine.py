@@ -197,7 +197,7 @@ async def test_dry_run_entry_and_exit_produce_separate_pnl(tmp_path):
     await engine.verify_exit()
     assert db.query("SELECT * FROM dry_run_position") == []
     snapshot = await engine.snapshot_dry_run_performance()
-    assert snapshot["pnl"] == -22.0
+    assert snapshot["pnl"] == pytest.approx(-20.12)
 
 
 @pytest.mark.asyncio

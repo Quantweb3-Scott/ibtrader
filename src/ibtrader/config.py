@@ -49,8 +49,7 @@ class ExecutionConfig(BaseModel):
     exit_submit_after_open_seconds: int = 60
     fallback_exit_after_open_seconds: int = 120
     force_exit_after_open_seconds: int = 300
-    dry_run_commission_per_share_usd: float = 0.005
-    dry_run_min_commission_usd: float = 1.0
+    dry_run_commission_bps_per_side: float = Field(default=0.6, ge=0)
 
     @model_validator(mode="after")
     def exit_timeline_is_ordered(self):

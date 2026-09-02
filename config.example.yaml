@@ -36,8 +36,7 @@ execution:
   exit_submit_after_open_seconds: 60
   fallback_exit_after_open_seconds: 120
   force_exit_after_open_seconds: 300
-  dry_run_commission_per_share_usd: 0.005
-  dry_run_min_commission_usd: 1.0
+  dry_run_commission_bps_per_side: 0.6
 
 risk:
   trading_enabled: false

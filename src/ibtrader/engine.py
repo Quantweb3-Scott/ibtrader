@@ -245,11 +245,9 @@ class TradingEngine:
             )
             raise RuntimeError(f"turnover snapshot failed: {exc}") from exc
 
-    def dry_run_commission(self, quantity: float) -> float:
-        return max(
-            self.settings.execution.dry_run_min_commission_usd,
-            abs(quantity) * self.settings.execution.dry_run_commission_per_share_usd,
-        )
+    def dry_run_commission(self, quantity: float, price: float) -> float:
+        notional = abs(float(quantity) * float(price))
+        return notional * self.settings.execution.dry_run_commission_bps_per_side / 10_000
 
     @staticmethod
     def _opposing_price(quote: Quote, action: str) -> float | None:
@@ -271,7 +269,11 @@ class TradingEngine:
 
     async def snapshot_dry_run_performance(self) -> dict:
         variant_positions = self.db.query("SELECT * FROM variant_dry_run_position")
-        if variant_positions or self.db.query("SELECT 1 FROM variant_dry_run_fill LIMIT 1"):
+        if (
+            variant_positions
+            or self.db.query("SELECT 1 FROM variant_dry_run_fill LIMIT 1")
+            or self.db.query("SELECT 1 FROM variant_signal LIMIT 1")
+        ):
             return await self._snapshot_variant_dry_run_performance(variant_positions)
         positions = self.db.query("SELECT * FROM dry_run_position WHERE id=1")
         market_value = 0.0
@@ -970,7 +972,7 @@ class TradingEngine:
                     if not orders:
                         continue
                     order = orders[0]
-                    commission = self.dry_run_commission(position["quantity"])
+                    commission = self.dry_run_commission(position["quantity"], price)
                     self.db.execute(
                         "INSERT OR IGNORE INTO variant_dry_run_fill VALUES(?,?,?,?,?,?,?,?,?)",
                         (f"sim:{order['local_order_id']}", strategy_id, order["order_ref"],
@@ -1006,7 +1008,7 @@ class TradingEngine:
                                 {"ticker": position["ticker"]},
                             )
                             return
-                        commission = self.dry_run_commission(position["quantity"])
+                        commission = self.dry_run_commission(position["quantity"], price)
                         self.db.execute(
                             "INSERT OR IGNORE INTO dry_run_fill VALUES(?,?,?,?,?,?,?,?)",
                             (
@@ -1088,7 +1090,7 @@ class TradingEngine:
                         )
                         continue
                     strategy_id = str(order["order_ref"]).split(":", 1)[0]
-                    commission = self.dry_run_commission(order["quantity"])
+                    commission = self.dry_run_commission(order["quantity"], price)
                     self.db.execute(
                         "INSERT OR IGNORE INTO variant_dry_run_fill VALUES(?,?,?,?,?,?,?,?,?)",
                         (f"sim:{order['local_order_id']}", strategy_id, order["order_ref"],
@@ -1134,7 +1136,7 @@ class TradingEngine:
                 )
                 self.transition(TradingState.BUY_NOT_FILLED, "DRY_RUN LOC price not reached")
                 return
-            commission = self.dry_run_commission(order["quantity"])
+            commission = self.dry_run_commission(order["quantity"], price)
             self.db.execute(
                 "INSERT OR IGNORE INTO dry_run_fill VALUES(?,?,?,?,?,?,?,?)",
                 (
